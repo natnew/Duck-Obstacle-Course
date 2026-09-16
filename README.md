@@ -134,8 +134,11 @@ python -m duck_course run \
   --strategy clearance --output "$COURSE/results/trial-fixed-clearance.json"
 ```
 
-The runner enables the policy through `robot.enable` and sends `robot.move` at
-10 Hz (`vx` m/s, `vyaw` left-positive rad/s). Depth comes from the **same official
+The runner enables the policy through `robot.enable`, verifies policy availability
+and live standing/walking controller execution through `robot.subscribe`, then sends
+`robot.move` at 10 Hz (`vx` m/s, `vyaw` left-positive rad/s). Missing policies or a
+controller that fails to become ready within `startup_s` are runtime failures,
+not scored navigation stalls. Depth comes from the **same official
 ToF ray caster** used by simulated `tofd`, via the telemetry endpoint; running
 `tofd` separately is not required. Stock `duck-body` alone does not expose
 collision counters and cannot replace the instrumented adapter for scoring.
@@ -177,7 +180,8 @@ numbers or claims of successful locomotion are included.
 ## Definitions and limitations
 
 - **Depth:** millimetres, row-major 8×8; column zero is left. Statuses 5 and 9
-  are valid. In this simulator only, status 255 with distance zero is a no-hit
+  are valid; noisy valid hits beyond the nominal range are saturated at 4 m.
+  In this simulator only, status 255 with distance zero is a no-hit
   ray, represented as 4 m. Other invalid samples fail closed. Rows 1–4 limit
   ground/self returns; this heuristic needs tuning against actual head posture.
   Do not reuse the no-hit interpretation for real hardware.

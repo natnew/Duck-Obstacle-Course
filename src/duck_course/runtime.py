@@ -21,7 +21,7 @@ class Connection:
         self.socket.settimeout(0.2)
         try:
             self.socket.connect(address)
-            self.file = self.socket.makefile("rwb")
+            self.file = self.socket.makefile("rb")
         except BaseException:
             self.socket.close()
             raise
@@ -30,12 +30,13 @@ class Connection:
         return self
 
     def __exit__(self, *args):
-        self.file.close()
-        self.socket.close()
+        with suppress(OSError):
+            self.file.close()
+        with suppress(OSError):
+            self.socket.close()
 
     def send(self, message: dict):
-        self.file.write((json.dumps(message, allow_nan=False) + "\n").encode())
-        self.file.flush()
+        self.socket.sendall((json.dumps(message, allow_nan=False) + "\n").encode())
 
     def receive(self) -> dict:
         raw = self.file.readline(65537)
@@ -62,6 +63,29 @@ class Connection:
         if response.get("id") != 1 or "result" not in response:
             raise ValueError("robot.enable was not acknowledged")
 
+    def wait_ready(self, timeout_s: float):
+        """Use a dedicated connection so unread subscriptions cannot queue during driving."""
+        deadline = time.monotonic() + timeout_s
+        self.send({"jsonrpc": "2.0", "id": 2, "method": "robot.subscribe",
+                   "params": {"hz": 10}})
+        accepted = False
+        while time.monotonic() < deadline:
+            self.socket.settimeout(min(0.2, max(0.001, deadline - time.monotonic())))
+            response = self.receive()
+            if response.get("id") == 2:
+                result = response.get("result", {})
+                if (result.get("accepted") is not True or not result.get("walk")
+                        or result.get("unavailable")):
+                    raise ValueError("robotd locomotion policy is unavailable")
+                accepted = True
+            elif accepted and response.get("method") == "robot.state":
+                state = response.get("params", {})
+                safety = state.get("safety", {})
+                if (state.get("policy") in ("walk", "stand")
+                        and safety.get("fallen") is False and safety.get("limp") is False):
+                    return
+        raise ValueError("robotd locomotion controller did not become ready")
+
 
 def run_episode(course: dict, robot_socket: str, telemetry_port: int,
                 strategy: str, config: dict) -> dict:
@@ -73,25 +97,37 @@ def run_episode(course: dict, robot_socket: str, telemetry_port: int,
     actions = []
     error = None
     began = time.monotonic()
+
+    def validate_start(sample):
+        if sample["course_id"] != course_id:
+            raise ValueError("layout does not match the running simulator")
+        if math.dist(sample["trunk"][:2], course["start"]) > 0.1:
+            raise ValueError("restart simulator at the start before each episode")
+        check = Episode(course, evaluation_config)
+        check.update(sample)
+        if check.status != "running" or not sectors(sample["depth"]).usable:
+            raise ValueError("simulator is not ready for an episode")
+
     with ExitStack() as stack:
         robot = None
         try:
-            telemetry = stack.enter_context(Connection(("127.0.0.1", telemetry_port)))
-            initial = telemetry.observe()
-            if initial["course_id"] != course_id:
-                raise ValueError("layout does not match the running simulator")
-            if math.dist(initial["trunk"][:2], course["start"]) > 0.1:
-                raise ValueError("restart simulator at the start before each episode")
-            episode.update(initial)
-            if episode.status != "running" or not sectors(initial["depth"]).usable:
-                raise ValueError("simulator is not ready for an episode")
+            with Connection(("127.0.0.1", telemetry_port)) as telemetry:
+                validate_start(telemetry.observe())
             robot = stack.enter_context(Connection(str(Path(robot_socket).expanduser())))
             robot.enable()
+            with Connection(str(Path(robot_socket).expanduser())) as monitor:
+                monitor.wait_ready(evaluation_config.startup_s)
+            # Reconnect after readiness: the read-only server expires idle clients.
+            telemetry = stack.enter_context(Connection(("127.0.0.1", telemetry_port)))
+            initial = telemetry.observe()
+            validate_start(initial)
+            episode.update(initial)
+            run_began = time.monotonic()
             next_tick = time.monotonic() + 0.1
             while episode.status == "running":
                 time.sleep(max(0.0, next_tick - time.monotonic()))
                 next_tick = time.monotonic() + 0.1
-                if time.monotonic() - began >= evaluation_config.timeout_s + 5:
+                if time.monotonic() - run_began >= evaluation_config.timeout_s + 5:
                     episode.finish("wall_timeout")
                     break
                 sample = telemetry.observe()

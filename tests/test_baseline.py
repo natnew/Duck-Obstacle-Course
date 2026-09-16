@@ -31,10 +31,13 @@ class SensingTests(unittest.TestCase):
 
     def test_invalid_pixels_fail_closed(self):
         for distance, status in [(0, 5), (-1, 5), (math.nan, 5),
-                                 (math.inf, 9), (4001, 5), (100, 1), (5, 255)]:
+                                 (math.inf, 9), (100, 1), (5, 255)]:
             with self.subTest(distance=distance, status=status):
                 self.assertFalse(sectors(frame(distance, status)).usable)
         self.assertTrue(sectors(frame(1000, 9)).usable)
+
+    def test_noise_beyond_nominal_range_is_saturated(self):
+        self.assertEqual(sectors(frame(4030, 5)), Sectors(4, 4, 4, True))
 
     def test_shape_validation(self):
         observation = frame()

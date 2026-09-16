@@ -32,8 +32,9 @@ def sectors(frame: dict) -> Sectors:
             if status == 255 and distance == 0:
                 value = 4.0
             elif (status in (5, 9) and isinstance(distance, (int, float))
-                  and math.isfinite(distance) and 0 < distance <= 4000):
-                value = distance / 1000
+                  and math.isfinite(distance) and distance > 0):
+                # The official ray caster adds noise after its 4 m range cutoff.
+                value = min(distance / 1000, 4.0)
             else:
                 value = 0.0
                 usable = False

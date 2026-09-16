@@ -20,13 +20,16 @@ def observation(t=0, x=0):
 
 
 class RunnerTests(unittest.TestCase):
-    def run_trial(self, observations, enable_error=None):
-        telemetry, robot = MagicMock(), MagicMock()
+    def run_trial(self, observations, enable_error=None, readiness_error=None):
+        telemetry, robot, monitor = MagicMock(), MagicMock(), MagicMock()
         telemetry.__enter__.return_value = telemetry
         robot.__enter__.return_value = robot
-        telemetry.observe.side_effect = observations
+        monitor.__enter__.return_value = monitor
+        telemetry.observe.side_effect = [observations[0], *observations]
         robot.enable.side_effect = enable_error
-        with patch("duck_course.runtime.Connection", side_effect=[telemetry, robot]), \
+        monitor.wait_ready.side_effect = readiness_error
+        with patch("duck_course.runtime.Connection",
+                   side_effect=[telemetry, robot, monitor, telemetry]), \
                 patch("duck_course.runtime.time.sleep"):
             result = run_episode(layout(), "/tmp/test-duck.sock", 7802, "clearance", {})
         return result, robot
@@ -54,6 +57,13 @@ class RunnerTests(unittest.TestCase):
     def test_enable_failure_stops(self):
         result, robot = self.run_trial([observation()], ValueError("not enabled"))
         self.assertEqual(result["status"], "sensor_or_runtime_failure")
+        self.assertEqual(robot.move.call_args.args[0]["vx"], 0)
+
+    def test_missing_controller_is_not_a_scored_stall(self):
+        result, robot = self.run_trial([observation()],
+                                       readiness_error=ValueError("no policy"))
+        self.assertEqual(result["status"], "sensor_or_runtime_failure")
+        self.assertFalse(result["scored"])
         self.assertEqual(robot.move.call_args.args[0]["vx"], 0)
 
     def test_stale_observation_stops(self):
@@ -109,6 +119,30 @@ def rpc_server(reply):
 
 
 class TransportTests(unittest.TestCase):
+    def test_cleanup_failure_still_closes_socket(self):
+        connection = Connection.__new__(Connection)
+        connection.file, connection.socket = MagicMock(), MagicMock()
+        connection.file.close.side_effect = OSError("broken pipe")
+        connection.__exit__(None, None, None)
+        connection.socket.close.assert_called_once()
+
+    def test_controller_readiness_wire_format(self):
+        reply = (b'{"id":2,"result":{"accepted":true,"walk":"walking.onnx"}}\n'
+                 b'{"method":"robot.state","params":{"policy":"held"}}\n'
+                 b'{"method":"robot.state","params":{"policy":"stand",'
+                 b'"safety":{"fallen":false,"limp":false}}}\n')
+        with rpc_server(reply) as (address, messages):
+            with Connection(address) as connection:
+                connection.wait_ready(1)
+        self.assertEqual(messages, [{"jsonrpc": "2.0", "id": 2, "method": "robot.subscribe",
+                                     "params": {"hz": 10}}])
+
+    def test_policy_unavailable_fails_readiness(self):
+        reply = b'{"id":2,"result":{"accepted":true,"unavailable":"no policy configured"}}\n'
+        with rpc_server(reply) as (address, _), Connection(address) as connection:
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                connection.wait_ready(1)
+
     def test_official_enable_and_move_wire_format(self):
         with rpc_server(b'{"jsonrpc":"2.0","id":1,"result":{}}\n') as (address, messages):
             with Connection(address) as connection:
