@@ -142,11 +142,21 @@ class EvaluationTests(unittest.TestCase):
                 self.episode().update(observation)
 
     def test_summary(self):
-        result = self.episode().result() | {"strategy": "clearance", "course_id": "fixed"}
+        result = self.episode().result() | {"strategy": "clearance", "course_id": "fixed",
+                                           "scored": True}
         summary = summarize([result | {"status": "success"}, result | {"status": "stalled"}])
         self.assertEqual(summary["clearance"]["success_rate"], 0.5)
         self.assertEqual(summary["clearance"]["layouts"], 1)
         self.assertEqual(summarize([]), {})
+
+    def test_no_telemetry_is_not_collision_free_evidence(self):
+        episode = self.episode()
+        episode.finish("sensor_or_runtime_failure")
+        result = episode.result() | {"strategy": "clearance", "course_id": "fixed"}
+        summary = summarize([result])["clearance"]
+        self.assertEqual(summary["scored_episodes"], 0)
+        self.assertIsNone(summary["collision_free_rate"])
+        self.assertIsNone(summary["upright_rate"])
 
 
 class SceneTests(unittest.TestCase):

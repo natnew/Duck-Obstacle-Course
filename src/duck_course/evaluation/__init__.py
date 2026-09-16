@@ -94,7 +94,9 @@ class Episode:
     def result(self) -> dict:
         return {"status": self.status, "elapsed_s": self.elapsed,
                 "distance_m": self.distance, "collision_events": self.collisions,
-                "falls": self.falls, "upright": self.falls == 0}
+                "falls": self.falls, "upright": self.falls == 0,
+                "scored": self.status in
+                ("success", "timeout", "stalled", "fallen", "out_of_bounds")}
 
 
 def summarize(results: list[dict]) -> dict:
@@ -102,14 +104,21 @@ def summarize(results: list[dict]) -> dict:
     for strategy in sorted({result["strategy"] for result in results}):
         runs = [result for result in results if result["strategy"] == strategy]
         count = len(runs)
+        scored = [r for r in runs if r["scored"]]
+        measured = len(scored)
         groups[strategy] = {
             "episodes": count,
+            "scored_episodes": measured,
             "layouts": len({r["course_id"] for r in runs}),
             "statuses": dict(Counter(r["status"] for r in runs)),
             "success_rate": sum(r["status"] == "success" for r in runs) / count,
-            "collision_free_rate": sum(r["collision_events"] == 0 for r in runs) / count,
-            "upright_rate": sum(r["upright"] for r in runs) / count,
-            "mean_elapsed_s": sum(r["elapsed_s"] for r in runs) / count,
-            "mean_collision_events": sum(r["collision_events"] for r in runs) / count,
+            "collision_free_rate": (sum(r["collision_events"] == 0 for r in scored)
+                                    / measured if measured else None),
+            "upright_rate": (sum(r["upright"] for r in scored)
+                             / measured if measured else None),
+            "mean_elapsed_s": (sum(r["elapsed_s"] for r in scored)
+                               / measured if measured else None),
+            "mean_collision_events": (sum(r["collision_events"] for r in scored)
+                                      / measured if measured else None),
         }
     return groups
