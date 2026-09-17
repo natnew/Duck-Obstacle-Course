@@ -1,0 +1,17 @@
+{
+  "policy": {
+    "blocked_m": 0.35,
+    "clear_m": 0.5,
+    "forward_m_s": 0.1,
+    "turn_rad_s": 0.4
+  },
+  "evaluation": {
+    "timeout_s": 90.0,
+    "stall_s": 10.0,
+    "progress_m": 0.05,
+    "recovery_s": 4.0,
+    "startup_s": 5.0,
+    "minimum_height_m": 0.075,
+    "minimum_up_cos": 0.5
+  }
+}

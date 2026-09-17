@@ -1,0 +1,7 @@
+[project]
+name = "duck-obstacle-course"
+version = "0.1.0"
+description = "A simulation-only reactive depth-navigation baseline for MicroDuck"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
