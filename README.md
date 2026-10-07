@@ -177,6 +177,30 @@ elapsed simulated/wall time, distance travelled, fall count, contact count, and
 failure reason. Results are local and git-ignored; no fabricated benchmark
 numbers or claims of successful locomotion are included.
 
+## Agent-driven evaluation workflow
+
+`/microduck-evaluation` ([prompt file](.github/prompts/microduck-evaluation.prompt.md))
+is a VS Code Copilot workflow that runs the test suite and a seeded evaluation
+(at least 5 seeds; default `0`–`9` plus the fixed course). Parallel subagents then
+audit the implementation and analyse the results, and a final agent reconciles
+their findings. The result is a dated report in `reports/`. The workflow does not
+modify `src/`, `tests/` or `configs/`, and it reports experiments it cannot run
+as not executed rather than estimating them.
+
+Without the official simulator stack, the evaluation uses
+[`scripts/microduck_evaluation.py`](scripts/microduck_evaluation.py). This is a
+deterministic **2-D kinematic proxy**: it drives the real `ReactivePolicy`,
+`sectors()` and `Episode` code with synthetic ray-cast depth. It checks layout
+determinism, course geometry and navigation logic. It is **not** evidence of
+MicroDuck locomotion, balance or contact behaviour.
+
+```sh
+PYTHONPATH="$COURSE/src" python scripts/microduck_evaluation.py \
+  --seeds 0 1 2 3 4 --output "$COURSE/results/eval-manual"
+```
+
+Reports and results are git-ignored.
+
 ## Definitions and limitations
 
 - **Depth:** millimetres, row-major 8×8; column zero is left. Statuses 5 and 9
@@ -219,6 +243,9 @@ src/duck_course/
   simulator.py   official body integration and contact telemetry
   runtime.py     fail-safe runtime client and episode execution
 configs/         conservative baseline settings
+scripts/         offline seeded evaluation harness (kinematic proxy)
+.github/prompts/ /microduck-evaluation agent workflow
+reports/         ignored dated evaluation reports
 tests/           standard-library unit, protocol, and optional MuJoCo tests
 results/         ignored generated courses and evaluation records
 ```
