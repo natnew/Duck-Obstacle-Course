@@ -9,8 +9,11 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 120_000,
   expect: { timeout: 30_000 },
-  retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : "list",
+  // The runtime comes from a CDN; allow one retry everywhere, not just in CI.
+  retries: 1,
+  reporter: process.env.CI
+    ? [["github"], ["list"]]
+    : [["list"], ["json", { outputFile: "test-results/last-run-report.json" }]],
   use: {
     baseURL,
     trace: "retain-on-failure",

@@ -405,9 +405,15 @@ async function boot(): Promise<void> {
       },
     });
     state.engine = engine;
-    ui.buildInfo.textContent =
-      `build ${__COMMIT__} · Pyodide ${engine.pyodideVersion} (pinned ${PYODIDE_VERSION}) · ` +
-      `CPython ${engine.pythonVersion} · ${engine.moduleCount} package modules loaded`;
+    const commit = document.createElement("a");
+    commit.href = `https://github.com/natnew/Duck-Obstacle-Course/commit/${__COMMIT__}`;
+    commit.rel = "noopener";
+    commit.textContent = `build ${__COMMIT__.slice(0, 7)}`;
+    ui.buildInfo.replaceChildren(
+      commit,
+      ` · Pyodide ${engine.pyodideVersion} (pinned ${PYODIDE_VERSION}) · ` +
+        `CPython ${engine.pythonVersion} · ${engine.moduleCount} package modules loaded`,
+    );
     ui.run.disabled = false;
     ui.sweepRun.disabled = false;
     setText(ui.status, "Ready — choose a course and run an episode.");
