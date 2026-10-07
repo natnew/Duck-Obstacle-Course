@@ -1,5 +1,8 @@
 # Duck Obstacle Course 🦆🚧
 
+[![CI and demo deployment](https://github.com/natnew/Duck-Obstacle-Course/actions/workflows/ci.yml/badge.svg)](https://github.com/natnew/Duck-Obstacle-Course/actions/workflows/ci.yml)
+[![Live demo](https://img.shields.io/badge/demo-GitHub%20Pages-2f9e44)](https://natnew.github.io/Duck-Obstacle-Course/)
+
 A small MicroDuck navigation experiment: **one duck, one course, reactive depth
 control, no global map**. A simple baseline comes before learned navigation.
 
@@ -7,6 +10,13 @@ control, no global map**. A simple baseline comes before learned navigation.
 end-to-end MicroDuck crossing has **not yet been demonstrated**. The tests validate
 navigation logic, protocol handling, scene compilation, and contact detection—not
 the trained locomotion policy's ability to finish a course.
+
+**[▶ Try the browser demo](https://natnew.github.io/Duck-Obstacle-Course/)** — the
+real `duck_course` package runs in your browser (CPython via Pyodide) on a 2-D
+kinematic proxy. It shows the navigation logic, not locomotion; see
+[Browser demo](#browser-demo).
+
+[![Browser demo: seed 4, latched left turn beside the second obstacle](docs/demo.png)](https://natnew.github.io/Duck-Obstacle-Course/?seed=4&strategy=clearance)
 
 ## What it does
 
@@ -36,6 +46,44 @@ Turns are latched until all sectors exceed the release threshold, reducing
 left/right chatter. Navigation receives depth only. Simulator pose and contact
 truth are reserved for evaluation and safety overrides, never goal steering.
 
+## Browser demo
+
+<https://natnew.github.io/Duck-Obstacle-Course/>
+
+The demo loads CPython in the browser with [Pyodide](https://pyodide.org/) and
+installs this repository's `duck_course` package into it, bundled at build time.
+The policy, sensing, scoring and summary code that runs on the page is therefore
+the same code that the unit tests cover; there is no JavaScript re-implementation
+to drift. The page drives [`duck_course.proxy`](src/duck_course/proxy.py), a
+deterministic 2-D kinematic proxy with a synthetic ray-cast ToF frame.
+
+What it shows: the course, the eight depth rays coloured by sector, the
+`blocked_m`/`clear_m` hysteresis bands, the latched turn, which decision rule
+fired, contact onsets, and the episode outcome. A sweep panel runs
+`summarize()` over any seed range for both strategies and deep-links every
+non-success case. Deep links are shareable, for example
+[`?seed=48&strategy=clearance`](https://natnew.github.io/Duck-Obstacle-Course/?seed=48&strategy=clearance)
+reproduces the corner-clipping stall described under
+[Definitions and limitations](#definitions-and-limitations), with the same
+action-trace hash as the native Python run.
+
+What it does not show: legs, balance, falls, slip, latency, the trained ONNX
+locomotion policies, or MuJoCo contact dynamics. Proxy outcomes are evidence about
+the reactive navigation logic only. The first visit downloads about 10 MB of
+runtime from the jsDelivr CDN; it is cached afterwards.
+
+Run it locally (Node 22+):
+
+```sh
+cd web
+npm ci
+npm run dev          # http://localhost:5173/
+npm run build        # type-check and bundle to web/dist
+npm run test:e2e     # Playwright tests against the production build
+```
+
+See [`web/README.md`](web/README.md) for the layout and the screenshot script.
+
 ## Local tests
 
 Python 3.12+ is sufficient for the core; it has no third-party dependencies.
@@ -51,8 +99,11 @@ python -m duck_course --help
 
 The optional engine test runs when MuJoCo is installed; otherwise it is explicitly
 skipped. Run the same suite using the official RL environment's Python to include
-it. It uses a tiny test body, not a substitute MicroDuck controller. There was no
-existing lint/build configuration; no extra lint or test framework is required.
+it. It uses a tiny test body, not a substitute MicroDuck controller. The transport
+tests use AF_UNIX sockets, as robotd does, and are skipped on Windows; the runner
+itself is Linux-only because the official simulator stack is. CI runs the suite
+on Python 3.12 and 3.13, the offline proxy harness with its determinism gate, the
+web build, and the browser tests, then deploys the demo.
 
 ## Official simulator prerequisites
 
@@ -75,6 +126,28 @@ scored; the operator must start that daemon with the matching `--sim` endpoint.
 Use a dedicated local runtime directory. Both simulator ports bind to loopback.
 
 ## Run one fixed course (Linux)
+
+Three processes take part. The runner only ever sees depth and a read-only truth
+feed; locomotion stays with the official daemon.
+
+```mermaid
+sequenceDiagram
+    participant S as duck_course simulate<br/>(official MuJoCo body + contact counter)
+    participant D as robotd<br/>(official ONNX locomotion)
+    participant R as duck_course run<br/>(navigation + scoring)
+    R->>S: observe (telemetry :7802)
+    S-->>R: course_id, trunk pose, up_cos, contacts, 8×8 ToF
+    R->>D: robot.enable, robot.subscribe
+    D-->>R: policy ready (walk/stand, not fallen)
+    loop every 100 ms until a terminal state
+        R->>S: observe
+        S-->>R: telemetry sample
+        Note over R: sectors() → ReactivePolicy.decide()<br/>Episode.update() may override
+        R->>D: robot.move {vx, vy, vyaw}
+        D->>S: joint targets (body protocol :7801)
+    end
+    R->>D: robot.move {0, 0, 0}
+```
 
 Use absolute paths for `RL` and `RUNTIME` below. Set these variables and
 `PYTHONPATH` in each terminal, or use equivalent absolute arguments.
@@ -188,18 +261,22 @@ modify `src/`, `tests/` or `configs/`, and it reports experiments it cannot run
 as not executed rather than estimating them.
 
 Without the official simulator stack, the evaluation uses
-[`scripts/microduck_evaluation.py`](scripts/microduck_evaluation.py). This is a
+[`scripts/microduck_evaluation.py`](scripts/microduck_evaluation.py), a thin
+harness over [`duck_course.proxy`](src/duck_course/proxy.py). This is a
 deterministic **2-D kinematic proxy**: it drives the real `ReactivePolicy`,
 `sectors()` and `Episode` code with synthetic ray-cast depth. It checks layout
 determinism, course geometry and navigation logic. It is **not** evidence of
-MicroDuck locomotion, balance or contact behaviour.
+MicroDuck locomotion, balance or contact behaviour. The browser demo uses the
+same module, so the two always agree.
 
 ```sh
 PYTHONPATH="$COURSE/src" python scripts/microduck_evaluation.py \
   --seeds 0 1 2 3 4 --output "$COURSE/results/eval-manual"
 ```
 
-Reports and results are git-ignored.
+Reports and results are git-ignored. The default seed range (fixed + 0–9)
+succeeds everywhere in the proxy; widen it to see the corner-clipping stall
+below (`--seeds $(seq 0 49)` reaches seeds 16, 39 and 48).
 
 ## Definitions and limitations
 
@@ -231,6 +308,16 @@ Reports and results are git-ignored.
   It can turn away from the finish, get stuck, miss low obstacles, or fail to
   balance. Random layouts maintain geometric room, not a proof of navigability.
   Real-time simulator pacing and upstream policy compatibility matter.
+- **Known failure mode — corner clipping:** with a 45° sensor cone, the body can
+  touch an obstacle corner that no ray sees. In the proxy, seeds 16 and 39
+  (`right-hand`) and 48 (both strategies) end this way: the robot sits against
+  obstacle 1's corner heading about −25°, every sector reads above `blocked_m`,
+  and it commands `forward` until the stall timer fires. Over the fixed course
+  plus seeds 0–49 the proxy records 50/51 successes for `clearance` and 48/51
+  for `right-hand`; all four failures are this case. The behaviour is pinned by a
+  regression test (`tests/test_proxy.py`) and a browser test so that any change
+  to the navigation logic surfaces it. A body-width guard on the outer sectors is
+  the obvious next experiment; it has not been implemented.
 
 ## Repository
 
@@ -240,13 +327,18 @@ src/duck_course/
   navigation/    deterministic reactive strategies and velocity commands
   scenes/        fixed/seeded layouts and MJCF generation
   evaluation/    terminal states and strategy summaries
+  proxy.py       2-D kinematic proxy shared by the harness and the browser demo
   simulator.py   official body integration and contact telemetry
   runtime.py     fail-safe runtime client and episode execution
 configs/         conservative baseline settings
-scripts/         offline seeded evaluation harness (kinematic proxy)
-.github/prompts/ /microduck-evaluation agent workflow
+scripts/         offline seeded evaluation harness over duck_course.proxy
+web/             browser demo: Vite + TypeScript shell around Pyodide
+docs/            README screenshot (regenerate with web/scripts/capture.mjs)
+.github/
+  workflows/     CI: Python tests, proxy harness, web build, browser tests, Pages
+  prompts/       /microduck-evaluation agent workflow
 reports/         ignored dated evaluation reports
-tests/           standard-library unit, protocol, and optional MuJoCo tests
+tests/           standard-library unit, protocol, proxy, and optional MuJoCo tests
 results/         ignored generated courses and evaluation records
 ```
 

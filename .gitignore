@@ -1,7 +1,14 @@
 __pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
 results/*
 !results/.gitkeep
 reports/*
 !reports/.gitkeep
+
+# Web demo
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/

@@ -1,0 +1,95 @@
+name: CI and demo deployment
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEMO_BASE: /Duck-Obstacle-Course/
+
+jobs:
+  python:
+    name: Python tests and proxy harness (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit, protocol and proxy tests
+        run: python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: src
+      - name: Offline proxy harness (fixed course + seeds 0–9, determinism gate)
+        run: python scripts/microduck_evaluation.py --output results/ci-eval
+        env:
+          PYTHONPATH: src
+      - name: Proxy summary
+        run: cat results/ci-eval/proxy-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proxy-evaluation-py${{ matrix.python }}
+          path: results/ci-eval
+          retention-days: 14
+
+  web:
+    name: Web demo build and browser tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Type-check and build
+        run: npm run build
+        env:
+          DEMO_COMMIT: ${{ github.sha }}
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests against the production build
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: web/test-results
+          retention-days: 7
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: Deploy demo to GitHub Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [python, web]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
