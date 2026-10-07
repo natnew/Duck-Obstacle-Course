@@ -1,0 +1,23 @@
+{
+  "name": "duck-obstacle-course-demo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser demo of the Duck Obstacle Course reactive navigation logic, run in-browser with Pyodide",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.3"
+  }
+}

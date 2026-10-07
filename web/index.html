@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Duck Obstacle Course — reactive navigation demo</title>
+    <meta
+      name="description"
+      content="Interactive demo of the MicroDuck obstacle-course reactive depth-navigation baseline. The real Python package runs in your browser via Pyodide on a 2-D kinematic proxy."
+    />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦆</text></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body data-state="loading">
+    <header class="site-header">
+      <div class="wrap header-row">
+        <div>
+          <h1>Duck Obstacle Course</h1>
+          <p class="tagline">
+            One duck, one course, reactive depth control, no global map — the
+            <code>duck_course</code> Python package running in your browser.
+          </p>
+        </div>
+        <a class="repo-link" href="https://github.com/natnew/Duck-Obstacle-Course" rel="noopener">
+          Source on GitHub
+        </a>
+      </div>
+    </header>
+
+    <div class="wrap">
+      <aside class="notice" role="note">
+        <strong>What you are watching.</strong> A 2-D kinematic proxy drives the real
+        <code>ReactivePolicy</code>, <code>sectors()</code> and <code>Episode</code> code with
+        synthetic ray-cast depth. There are no legs, balance, falls, slip or trained locomotion
+        policies here. This shows the <em>navigation logic</em>; it is not evidence of MicroDuck
+        locomotion. The closed-loop MuJoCo workflow is described in the repository README.
+      </aside>
+    </div>
+
+    <main class="wrap layout">
+      <section class="panel stage" aria-labelledby="stage-heading">
+        <h2 id="stage-heading" class="visually-hidden">Course view</h2>
+        <canvas id="course" role="img" aria-label="Top-down view of the course, the robot, its depth rays and its trail"></canvas>
+        <div class="legend" aria-hidden="true">
+          <span><i class="swatch" style="background: #1c7ed6"></i>left sector</span>
+          <span><i class="swatch" style="background: #e67700"></i>forward sector</span>
+          <span><i class="swatch" style="background: #7048e8"></i>right sector</span>
+          <span><i class="swatch ring" style="border-color: rgba(224, 49, 49, 0.8)"></i>blocked_m</span>
+          <span><i class="swatch ring" style="border-color: rgba(47, 158, 68, 0.8)"></i>clear_m</span>
+          <span><i class="swatch" style="background: #d9742b"></i>obstacle</span>
+          <span><i class="swatch" style="background: #6b7a8f"></i>wall</span>
+        </div>
+        <div class="transport">
+          <label class="scrub">
+            <span class="visually-hidden">Frame</span>
+            <input id="scrub" type="range" min="0" max="0" value="0" step="1" disabled aria-label="Episode frame" />
+          </label>
+          <div class="transport-buttons">
+            <button id="play" type="button" disabled aria-pressed="false">Play</button>
+            <button id="step-back" type="button" disabled aria-label="Step back one frame">−1</button>
+            <button id="step-forward" type="button" disabled aria-label="Step forward one frame">+1</button>
+            <label>Speed
+              <select id="speed" aria-label="Playback speed">
+                <option value="1">1× (10 Hz)</option>
+                <option value="2">2×</option>
+                <option value="4" selected>4×</option>
+                <option value="8">8×</option>
+              </select>
+            </label>
+            <span id="clock" class="clock" aria-live="off">t = 0.0 s</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel controls" aria-labelledby="controls-heading">
+        <h2 id="controls-heading">Episode</h2>
+        <form id="episode-form" class="form-grid">
+          <label>Course
+            <select id="seed" aria-describedby="seed-help">
+              <option value="fixed" selected>fixed (regression baseline)</option>
+            </select>
+          </label>
+          <p id="seed-help" class="help">Seeds perturb both obstacles by up to ±12 cm.</p>
+          <label>Strategy
+            <select id="strategy">
+              <option value="clearance" selected>clearance — turn toward the clearer side</option>
+              <option value="right-hand">right-hand — prefer a right turn when blocked</option>
+            </select>
+          </label>
+          <button id="run" type="submit" class="primary" disabled>Run episode</button>
+        </form>
+
+        <h2>Live state</h2>
+        <dl class="state">
+          <div><dt>Action</dt><dd id="action">—</dd></div>
+          <div><dt>Latched turn</dt><dd id="latched">—</dd></div>
+          <div><dt>Left</dt><dd id="sector-left">—</dd></div>
+          <div><dt>Forward</dt><dd id="sector-forward">—</dd></div>
+          <div><dt>Right</dt><dd id="sector-right">—</dd></div>
+          <div><dt>Pose</dt><dd id="pose">—</dd></div>
+          <div><dt>Contacts</dt><dd id="contacts">—</dd></div>
+          <div><dt>Status</dt><dd id="status" aria-live="polite">Loading Python runtime…</dd></div>
+        </dl>
+
+        <h2>Decision rules</h2>
+        <table class="rules" id="rules">
+          <thead><tr><th scope="col">Condition</th><th scope="col">Action</th></tr></thead>
+          <tbody></tbody>
+        </table>
+
+        <div id="result" class="result" hidden>
+          <h2>Result</h2>
+          <dl class="state compact">
+            <div><dt>Outcome</dt><dd id="result-status">—</dd></div>
+            <div><dt>Elapsed (sim)</dt><dd id="result-elapsed">—</dd></div>
+            <div><dt>Distance</dt><dd id="result-distance">—</dd></div>
+            <div><dt>Contact onsets</dt><dd id="result-collisions">—</dd></div>
+            <div><dt>Steps</dt><dd id="result-steps">—</dd></div>
+            <div><dt>Course id</dt><dd id="result-course" class="mono">—</dd></div>
+            <div><dt>Action trace</dt><dd id="result-trace" class="mono">—</dd></div>
+          </dl>
+        </div>
+      </aside>
+
+      <section class="panel sweep" aria-labelledby="sweep-heading">
+        <div class="sweep-head">
+          <h2 id="sweep-heading">Compare strategies across seeds</h2>
+          <form id="sweep-form" class="sweep-form">
+            <label>Seeds 0 –
+              <input id="sweep-max" type="number" min="4" max="199" value="49" aria-label="Highest seed" />
+            </label>
+            <label><input id="sweep-fixed" type="checkbox" checked /> include fixed course</label>
+            <button id="sweep-run" type="submit" disabled>Run sweep</button>
+          </form>
+        </div>
+        <p class="help">
+          Runs the real <code>summarize()</code> over every seed for both strategies. The default
+          11 courses (fixed + 0–9) succeed everywhere; wider sweeps expose a corner-clipping stall
+          where the 45° sensor cone looks past an obstacle edge that the body touches.
+        </p>
+        <progress id="sweep-progress" max="1" value="0" hidden></progress>
+        <div id="sweep-output" class="sweep-output" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <footer class="wrap site-footer">
+      <p>
+        Independent community project built on the open-source
+        <a href="https://pollen-robotics.com/microduck/" rel="noopener">MicroDuck</a> ecosystem; not an
+        official Pollen Robotics project. MIT licence.
+      </p>
+      <p id="build-info" class="mono"></p>
+    </footer>
+
+    <div id="loading" class="loading" role="status" aria-live="polite">
+      <div class="loading-card">
+        <h2>Loading CPython in your browser</h2>
+        <p id="loading-stage">Fetching the Pyodide runtime (about 10 MB, cached after the first visit)…</p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
