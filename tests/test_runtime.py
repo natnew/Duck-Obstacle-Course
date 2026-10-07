@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+﻿from contextlib import contextmanager
 import json
 from pathlib import Path
 import socketserver
@@ -93,6 +93,10 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(call.args[0], {"vx": 0, "vy": 0, "vyaw": 0})
 
 
+requires_unix_sockets = unittest.skipUnless(
+    hasattr(socketserver, "UnixStreamServer"), "robotd speaks over AF_UNIX sockets (POSIX only)")
+
+
 @contextmanager
 def rpc_server(reply):
     messages = []
@@ -126,6 +130,7 @@ class TransportTests(unittest.TestCase):
         connection.__exit__(None, None, None)
         connection.socket.close.assert_called_once()
 
+    @requires_unix_sockets
     def test_controller_readiness_wire_format(self):
         reply = (b'{"id":2,"result":{"accepted":true,"walk":"walking.onnx"}}\n'
                  b'{"method":"robot.state","params":{"policy":"held"}}\n'
@@ -137,12 +142,14 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(messages, [{"jsonrpc": "2.0", "id": 2, "method": "robot.subscribe",
                                      "params": {"hz": 10}}])
 
+    @requires_unix_sockets
     def test_policy_unavailable_fails_readiness(self):
         reply = b'{"id":2,"result":{"accepted":true,"unavailable":"no policy configured"}}\n'
         with rpc_server(reply) as (address, _), Connection(address) as connection:
             with self.assertRaisesRegex(ValueError, "unavailable"):
                 connection.wait_ready(1)
 
+    @requires_unix_sockets
     def test_official_enable_and_move_wire_format(self):
         with rpc_server(b'{"jsonrpc":"2.0","id":1,"result":{}}\n') as (address, messages):
             with Connection(address) as connection:
@@ -154,6 +161,7 @@ class TransportTests(unittest.TestCase):
              "params": {"vx": 0.1, "vy": 0, "vyaw": -0.4}},
         ])
 
+    @requires_unix_sockets
     def test_reject_errors_and_missing_acknowledgements(self):
         for response in (b'{"error":"no"}\n', b'{"id":2,"result":{}}\n',
                          b'[]\n', b'{}\n', b'x' * 65537 + b'\n'):
@@ -161,6 +169,7 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     connection.enable()
 
+    @requires_unix_sockets
     def test_observation_request(self):
         with rpc_server(b'{"sim_time":1}\n') as (address, messages):
             with Connection(address) as connection:

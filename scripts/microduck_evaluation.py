@@ -1,4 +1,4 @@
-"""Offline, deterministic evaluation harness for the /microduck-evaluation workflow.
+﻿"""Offline, deterministic evaluation harness for the /microduck-evaluation workflow.
 
 Imports the repository's navigation, sensing, scene and evaluation code read-only
 and writes artefacts under results/ (git-ignored). It never modifies src/.
@@ -6,11 +6,10 @@ and writes artefacts under results/ (git-ignored). It never modifies src/.
 What it measures:
   * layout determinism and course-identity stability per seed;
   * course geometry per seed (lateral gaps, longitudinal spacing);
-  * a 2-D KINEMATIC PROXY episode per (seed, strategy): a point-robot unicycle
-    with a synthetic ray-cast 8x8 ToF frame, driven by the real ReactivePolicy and
-    scored by the real Episode. This is NOT MicroDuck locomotion: there are no
-    legs, balance, falls, slip, latency or upstream policies. Proxy outcomes
-    describe the reactive navigation logic only.
+  * a 2-D KINEMATIC PROXY episode per (seed, strategy): see duck_course.proxy.
+    This is NOT MicroDuck locomotion: there are no legs, balance, falls, slip,
+    latency or upstream policies. Proxy outcomes describe the reactive
+    navigation logic only.
 
 Usage:
   PYTHONPATH=src python scripts/microduck_evaluation.py --seeds 0 1 2 3 4 \
@@ -20,158 +19,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 import hashlib
 import json
-import math
 from pathlib import Path
 import platform
 import subprocess
 import sys
 
-from duck_course.evaluation import Episode, EvaluationConfig, summarize
-from duck_course.navigation import Action, PolicyConfig, ReactivePolicy
+from duck_course.evaluation import summarize
+from duck_course.proxy import STRATEGIES, configs, geometry, proxy_episode
 from duck_course.scenes import identity, layout
-from duck_course.sensing import sectors
-
-STRATEGIES = ("clearance", "right-hand")
-WALL_HALF_THICKNESS = 0.025  # scenes.write_scene: wall size "1.9 0.025 0.2"
-WALL_X = (1.4 - 1.9, 1.4 + 1.9)
-
-
-@dataclass(frozen=True)
-class ProxyAssumptions:
-    """Explicit, inspectable assumptions of the kinematic proxy."""
-
-    dt_s: float = 0.1  # runtime.py commands at 10 Hz
-    robot_radius_m: float = 0.08
-    sensor_offset_m: float = 0.08
-    horizontal_fov_deg: float = 45.0
-    max_range_m: float = 4.0
-    trunk_height_m: float = 0.12
-
-
-def _boxes(course: dict) -> list[tuple[str, float, float, float, float]]:
-    """Axis-aligned (name, xmin, xmax, ymin, ymax) for obstacles and walls."""
-    boxes = []
-    for index, obstacle in enumerate(course["obstacles"]):
-        hx, hy, _ = obstacle["half_size"]
-        boxes.append((f"obstacle_{index}", obstacle["x"] - hx, obstacle["x"] + hx,
-                      obstacle["y"] - hy, obstacle["y"] + hy))
-    for side in (-1, 1):
-        y = side * course["half_width"]
-        boxes.append((f"wall_{side}", WALL_X[0], WALL_X[1],
-                      y - WALL_HALF_THICKNESS, y + WALL_HALF_THICKNESS))
-    return boxes
-
-
-def geometry(course: dict) -> dict:
-    """Free lateral gaps beside each obstacle and longitudinal spacing."""
-    inner = course["half_width"] - WALL_HALF_THICKNESS
-    gaps = []
-    for index, obstacle in enumerate(course["obstacles"]):
-        hy = obstacle["half_size"][1]
-        gaps.append({"obstacle": index,
-                     "left_gap_m": round(inner - (obstacle["y"] + hy), 4),
-                     "right_gap_m": round((obstacle["y"] - hy) + inner, 4)})
-    ordered = sorted(course["obstacles"], key=lambda o: o["x"])
-    spacing = [round((b["x"] - b["half_size"][0]) - (a["x"] + a["half_size"][0]), 4)
-               for a, b in zip(ordered, ordered[1:])]
-    widest = [max(g["left_gap_m"], g["right_gap_m"]) for g in gaps]
-    return {"lateral_gaps": gaps, "longitudinal_spacing_m": spacing,
-            "min_widest_gap_m": min(widest) if widest else None}
-
-
-def _ray_box(ox: float, oy: float, dx: float, dy: float, box: tuple) -> float | None:
-    _, xmin, xmax, ymin, ymax = box
-    tmin, tmax = -math.inf, math.inf
-    for o, d, lo, hi in ((ox, dx, xmin, xmax), (oy, dy, ymin, ymax)):
-        if abs(d) < 1e-12:
-            if not lo <= o <= hi:
-                return None
-            continue
-        t1, t2 = (lo - o) / d, (hi - o) / d
-        tmin, tmax = max(tmin, min(t1, t2)), min(tmax, max(t1, t2))
-    if tmax < max(tmin, 0.0):
-        return None
-    return tmin if tmin >= 0 else 0.0
-
-
-def tof_frame(course: dict, x: float, y: float, heading: float,
-              assume: ProxyAssumptions) -> dict:
-    """Synthetic 8x8 frame; identical across rows. Column 0 is left (README)."""
-    ox = x + assume.sensor_offset_m * math.cos(heading)
-    oy = y + assume.sensor_offset_m * math.sin(heading)
-    fov = math.radians(assume.horizontal_fov_deg)
-    columns = []
-    for col in range(8):
-        angle = heading + fov / 2 - (col + 0.5) * fov / 8
-        dx, dy = math.cos(angle), math.sin(angle)
-        hits = [t for box in _boxes(course)
-                if (t := _ray_box(ox, oy, dx, dy, box)) is not None]
-        nearest = min(hits, default=None)
-        if nearest is None or nearest > assume.max_range_m:
-            columns.append((0, 255))  # simulator no-hit convention
-        else:
-            columns.append((max(1, round(nearest * 1000)), 5))
-    return {"rows": 8, "cols": 8,
-            "distance_mm": [d for _ in range(8) for d, _ in columns],
-            "status": [s for _ in range(8) for _, s in columns]}
-
-
-def _touching(course: dict, x: float, y: float, radius: float) -> list[str]:
-    touching = []
-    for name, xmin, xmax, ymin, ymax in _boxes(course):
-        cx, cy = min(max(x, xmin), xmax), min(max(y, ymin), ymax)
-        if math.hypot(x - cx, y - cy) < radius:
-            touching.append(name)
-    return touching
-
-
-def proxy_episode(course: dict, strategy: str, policy_cfg: PolicyConfig,
-                  eval_cfg: EvaluationConfig, assume: ProxyAssumptions) -> dict:
-    policy = ReactivePolicy(policy_cfg, strategy)
-    episode = Episode(course, eval_cfg)
-    x, y = course["start"]
-    heading, t = 0.0, 0.0
-    collisions, in_contact = 0, False
-    actions: list[str] = []
-    termination = None
-    while True:
-        override = episode.update({"sim_time": t, "trunk": [x, y, assume.trunk_height_m],
-                                   "up_cos": 1.0, "collision_events": collisions})
-        if override in (Action.DONE, Action.STOP):
-            termination = "episode"
-            break
-        action = policy.decide(sectors(tof_frame(course, x, y, heading, assume)))
-        actions.append(action.value)
-        if action == Action.STOP:
-            termination = "policy_stop"
-            break
-        command = policy.velocity(action)
-        heading += command["vyaw"] * assume.dt_s
-        nx = x + command["vx"] * math.cos(heading) * assume.dt_s
-        ny = y + command["vx"] * math.sin(heading) * assume.dt_s
-        if _touching(course, nx, ny, assume.robot_radius_m):
-            if not in_contact:
-                collisions += 1  # onset only; persistent contact counts once
-            in_contact = True  # blocked: the proxy body does not penetrate
-        else:
-            in_contact = False
-            x, y = nx, ny
-        t = round(t + assume.dt_s, 6)
-    result = episode.result()
-    result.update({
-        "strategy": strategy, "seed": course["seed"], "course_id": identity(course),
-        "termination": termination,
-        "final_pose": [round(x, 4), round(y, 4), round(heading, 4)],
-        "action_counts": {a: actions.count(a) for a in sorted(set(actions))},
-        "action_trace_sha256": hashlib.sha256(",".join(actions).encode()).hexdigest(),
-        "steps": len(actions),
-    })
-    if termination == "policy_stop":
-        result.update({"status": "policy_stop", "scored": False})
-    return result
 
 
 def _git(*args: str) -> str | None:
@@ -201,9 +59,7 @@ def main() -> int:
     args.output.mkdir(parents=True)
 
     config = json.loads(args.config.read_text())
-    policy_cfg = PolicyConfig(**config.get("policy", {}))
-    eval_cfg = EvaluationConfig(**config.get("evaluation", {}))
-    assume = ProxyAssumptions()
+    policy_cfg, eval_cfg, assume = configs(config)
     seeds: list[int | None] = ([] if args.no_fixed else [None]) + sorted(set(args.seeds))
 
     layouts, geometries, determinism, trials = {}, {}, [], []
